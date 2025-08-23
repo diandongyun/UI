@@ -95,7 +95,7 @@ h-ui
 | 面板名称 | 主要支持协议 | 特点 | 适用场景 |
 |----------|--------------|------|----------|
 | **x-ui** | VLESS / VMess | 轻量、简洁，功能基础，安装量大 | 个人使用，小规模节点 |
-| **3x-ui** | VLESS / VMess / Trojan / Shadowsocks | 增强版 x-ui，多用户、多节点，API 支持更好 | 多节点运维、需要 API 或批量管理 |
-| **s-ui** | Trojan / Shadowsocks / VLESS | 更注重多节点统一管理和权限控制 | 团队管理、大规模部署 |
+| **3x-ui** | VLESS / VMess / xhttp | 增强版 x-ui，多用户、多节点，API 支持更好 | 多节点运维、需要 API 或批量管理 |
+| **s-ui** | TUIC / Shadowsocks / VLESS | 更注重多节点统一管理和权限控制 | 团队管理、大规模部署 |
 | **h-ui** | Hysteria2 (hy2) | 新一代轻量面板，支持最新 hy2，性能高 | 需要 hy2 协议、低延迟环境 |
 
