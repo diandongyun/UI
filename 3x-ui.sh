@@ -91,6 +91,7 @@ print_banner() {
 ║   ╚═════╝ ╚═╝  ╚═╝       ╚═════╝ ╚═╝    ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝    ║
 ╠════════════════════════════════════════════════════════════════════════════════╣
 ║         🚀 多协议支持 | 可视化管理 | 自动配置 | 一键部署 | SSL证书            ║
+║                            固定版本: v2.6.2                                   ║
 ╚════════════════════════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${plain}"
@@ -466,6 +467,7 @@ upload_config() {
         "https_url": "${https_url}",
         "ssl_enabled": ${ssl_enabled:-false},
         "node_port": "${node_port}",
+        "version": "v2.6.2",
         "generated_time": "$(date -Iseconds)",
         "speed_test": "${speed}",
         "protocols_supported": ["VMess", "VLESS", "Trojan", "Shadowsocks", "WireGuard"],
@@ -645,6 +647,7 @@ config_after_install() {
     
     echo -e "${bold}${cyan}📊 服务器信息:${plain}"
     echo -e "  ${white}├${plain} 服务器IP: ${bold}${green}${ip}${plain}"
+    echo -e "  ${white}├${plain} 安装版本: ${bold}${green}v2.6.2${plain} ${yellow}(固定版本)${plain}"
     echo -e "  ${white}└${plain} 网络测速: ${bold}${green}${speed}${plain}"
     echo ""
     
@@ -667,7 +670,7 @@ config_after_install() {
 
 # 安装3X-UI主程序
 install_x_ui() {
-    print_header "📥 下载安装3X-UI主程序"
+    print_header "📥 下载安装3X-UI主程序 (v2.6.2)"
     
     # 停止可能运行的服务
     systemctl stop x-ui > /dev/null 2>&1 || true
@@ -678,21 +681,13 @@ install_x_ui() {
         exit 1
     }
 
-    local version="$1"
-    if [[ -z "$version" ]]; then
-        print_info "正在获取3X-UI最新版本信息..."
-        version=$(curl -4 -sL --connect-timeout 15 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null)
-        if [[ -z "$version" ]]; then
-            version="v2.6.6"  # 使用已知的稳定版本作为后备
-            print_warning "无法获取版本号，使用默认版本 ${version}"
-        else
-            print_success "获取到3X-UI最新版本: ${bold}${green}${version}${plain}"
-        fi
-    fi
+    # 强制使用版本 2.6.2
+    local version="v2.6.2"
+    print_success "使用固定版本: ${bold}${green}${version}${plain}"
 
     local filename="x-ui-linux-${arch}.tar.gz"
     
-    print_info "正在下载3X-UI v${version}..."
+    print_info "正在下载3X-UI ${version}..."
     if ! wget -4 -O "${filename}" --no-check-certificate --timeout=30 "https://github.com/MHSanaei/3x-ui/releases/download/${version}/${filename}" > /dev/null 2>&1; then
         print_error "下载3X-UI失败，请检查网络连接"
         exit 1
@@ -759,7 +754,7 @@ install_x_ui() {
     print_divider
     print_header "✨ 3X-UI安装完成"
     
-    echo -e "${bold}${green}🎊 3X-UI v${version} 安装部署完成！${plain}"
+    echo -e "${bold}${green}🎊 3X-UI ${version} 安装部署完成！${plain}"
     echo ""
     
     echo -e "${bold}${cyan}🛠️ 常用管理命令:${plain}"
@@ -777,6 +772,7 @@ install_x_ui() {
     echo -e "  ${white}├${plain} 用户管理: ${green}多用户流量统计${plain} ${yellow}(用量监控)${plain}"
     echo -e "  ${white}├${plain} 证书管理: ${green}自动申请Let's Encrypt证书${plain} ${yellow}(SSL支持)${plain}"
     echo -e "  ${white}├${plain} SSL加密: ${green}自签证书已配置${plain} ${yellow}(HTTPS访问)${plain}"
+    echo -e "  ${white}├${plain} 固定版本: ${green}v2.6.2稳定版${plain} ${yellow}(不检查更新)${plain}"
     echo -e "  ${white}└${plain} 系统监控: ${green}实时流量和系统状态${plain} ${yellow}(性能监控)${plain}"
     echo ""
     
@@ -846,7 +842,7 @@ main() {
     install_base
 
     print_info "步骤 2/4: 下载安装3X-UI主程序"
-    install_x_ui "$1"
+    install_x_ui
 
     print_info "步骤 3/4: 配置SSL证书"
     configure_3xui_ssl
@@ -856,6 +852,7 @@ main() {
     
     print_divider
     echo -e "${bold}${green}🎉 欢迎使用3X-UI面板管理系统！${plain}"
+    echo -e "${cyan}   固定版本: v2.6.2，无需检查更新${plain}"
     echo -e "${cyan}   IPv4模式: 已强制启用，确保最佳兼容性${plain}"
     echo -e "${cyan}   SSL证书: 已自动配置，支持HTTPS访问${plain}"
     echo -e "${cyan}   残留数据已清理${plain}"
