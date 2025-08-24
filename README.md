@@ -38,7 +38,7 @@ x-ui
 适合个人和小规模使用
 
 
-安装 3x-ui
+### 安装 3x-ui
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/3x-ui.sh)
 ```
@@ -56,7 +56,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/3x-ui.sh)
 适合有一定规模的节点部署
 
 
-安装 s-ui
+### 安装 s-ui
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/s-ui.sh)
 ```
@@ -72,7 +72,7 @@ s-ui
 适合团队或多节点运维场景
 
 
-安装 h-ui
+### 安装 h-ui
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/h-ui.sh)
 ```
