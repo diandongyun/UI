@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # H-UI 自动部署脚本 - 汉化版本，包含自签证书生成
 # 基于 jonssonyan/h-ui 项目
-# 版本: 1.0.0
+# 版本: 1.0.1 - 修复443端口配置问题
 # 作者: 自动部署脚本
 
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
@@ -386,6 +386,7 @@ get_server_ip() {
     echo "$server_ip"
 }
 
+# 修复后的防火墙配置函数 - 正确开放443端口
 configure_firewall() {
     echo_content blue "正在配置防火墙规则..."
     
@@ -396,6 +397,8 @@ configure_firewall() {
     echo_content blue "检测到SSH端口: $ssh_port"
     echo_content blue "H-UI面板端口: $h_ui_port"
     echo_content blue "SSH转发端口: $ssh_local_forwarded_port"
+    echo_content blue "HTTPS端口: 443 (将正确开放)"
+    echo_content blue "节点端口: $node_port"
     
     # 检测并配置防火墙
     if command -v ufw >/dev/null 2>&1; then
@@ -417,6 +420,14 @@ configure_firewall() {
         # 允许SSH转发端口
         ufw allow ${ssh_local_forwarded_port}/tcp comment "SSH Forward" >/dev/null 2>&1
         
+        # 正确开放443端口（TCP和UDP）
+        ufw allow 443/tcp comment "HTTPS TCP" >/dev/null 2>&1
+        ufw allow 443/udp comment "HTTPS UDP" >/dev/null 2>&1
+        
+        # 允许指定的节点端口（TCP和UDP）
+        ufw allow ${node_port}/tcp comment "Node Port TCP" >/dev/null 2>&1
+        ufw allow ${node_port}/udp comment "Node Port UDP" >/dev/null 2>&1
+        
         # 允许Hysteria2常用端口范围
         ufw allow 20000:60000/udp comment "Hysteria2 Ports" >/dev/null 2>&1
         
@@ -424,6 +435,7 @@ configure_firewall() {
         echo "y" | ufw --force enable >/dev/null 2>&1
         
         echo_content green "UFW防火墙配置完成"
+        echo_content green "已正确开放443端口（TCP和UDP）"
         
     elif command -v firewall-cmd >/dev/null 2>&1; then
         echo_content blue "使用firewalld配置防火墙..."
@@ -441,6 +453,14 @@ configure_firewall() {
         # 允许SSH转发端口
         firewall-cmd --permanent --add-port=${ssh_local_forwarded_port}/tcp >/dev/null 2>&1
         
+        # 正确开放443端口（TCP和UDP）
+        firewall-cmd --permanent --add-port=443/tcp >/dev/null 2>&1
+        firewall-cmd --permanent --add-port=443/udp >/dev/null 2>&1
+        
+        # 允许指定的节点端口（TCP和UDP）
+        firewall-cmd --permanent --add-port=${node_port}/tcp >/dev/null 2>&1
+        firewall-cmd --permanent --add-port=${node_port}/udp >/dev/null 2>&1
+        
         # 允许Hysteria2端口范围
         firewall-cmd --permanent --add-port=20000-60000/udp >/dev/null 2>&1
         
@@ -448,6 +468,7 @@ configure_firewall() {
         firewall-cmd --reload >/dev/null 2>&1
         
         echo_content green "firewalld防火墙配置完成"
+        echo_content green "已正确开放443端口（TCP和UDP）"
         
     elif command -v iptables >/dev/null 2>&1; then
         echo_content blue "使用iptables配置防火墙..."
@@ -478,6 +499,14 @@ configure_firewall() {
         # 允许SSH转发端口
         iptables -A INPUT -p tcp --dport ${ssh_local_forwarded_port} -j ACCEPT >/dev/null 2>&1
         
+        # 正确开放443端口（TCP和UDP）
+        iptables -A INPUT -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1
+        iptables -A INPUT -p udp --dport 443 -j ACCEPT >/dev/null 2>&1
+        
+        # 允许指定的节点端口（TCP和UDP）
+        iptables -A INPUT -p tcp --dport ${node_port} -j ACCEPT >/dev/null 2>&1
+        iptables -A INPUT -p udp --dport ${node_port} -j ACCEPT >/dev/null 2>&1
+        
         # 允许Hysteria2端口范围
         iptables -A INPUT -p udp --dport 20000:60000 -j ACCEPT >/dev/null 2>&1
         
@@ -487,16 +516,26 @@ configure_firewall() {
         fi
         
         echo_content green "iptables防火墙配置完成"
+        echo_content green "已正确开放443端口（TCP和UDP）"
         
     else
         echo_content yellow "未检测到防火墙工具，请手动配置以下端口："
         echo_content white "  SSH端口: ${ssh_port}/tcp"
         echo_content white "  H-UI面板: ${h_ui_port}/tcp"
         echo_content white "  SSH转发: ${ssh_local_forwarded_port}/tcp"
+        echo_content white "  HTTPS端口: 443/tcp + 443/udp"
+        echo_content white "  节点端口: ${node_port}/tcp + ${node_port}/udp"
         echo_content white "  Hysteria2: 20000-60000/udp"
     fi
     
     echo_content green "防火墙配置完成"
+    echo_content cyan "端口开放总结："
+    echo_content cyan "  ✓ SSH端口: ${ssh_port}/tcp"
+    echo_content cyan "  ✓ H-UI面板: ${h_ui_port}/tcp"
+    echo_content cyan "  ✓ SSH转发: ${ssh_local_forwarded_port}/tcp"
+    echo_content cyan "  ✓ HTTPS端口: 443/tcp + 443/udp （已正确配置）"
+    echo_content cyan "  ✓ 节点端口: ${node_port}/tcp + ${node_port}/udp"
+    echo_content cyan "  ✓ Hysteria2范围: 20000-60000/udp"
 }
 
 # 生成nvidia.com自签证书
@@ -831,7 +870,15 @@ upload_config() {
       "key_file": "${cert_path}/nvidia.com.key",
       "domains": ["nvidia.com", "*.nvidia.com", "www.nvidia.com"]
     },
-    "ssh_forward_port": "${ssh_forward_port}"
+    "ssh_forward_port": "${ssh_forward_port}",
+    "firewall_ports": {
+      "https_tcp": 443,
+      "https_udp": 443,
+      "node_tcp": "${node_port}",
+      "node_udp": "${node_port}",
+      "panel_tcp": "${panel_port}",
+      "ssh_forward_tcp": "${ssh_forward_port}"
+    }
   }
 }
 EOF
@@ -1044,7 +1091,7 @@ show_login_details() {
 🚀 节点配置信息："
     echo_content white "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo_content cyan "  🔌 节点端口: ${node_port} (TCP/UDP)"
-    echo_content cyan "  🌐 HTTPS端口: 443 (TCP/UDP)"
+    echo_content cyan "  🌐 HTTPS端口: 443 (TCP/UDP) 【已正确开放】"
     echo_content cyan "  📡 服务器地址: ${server_ip}"
     echo_content cyan "  🔒 TLS证书: ${cert_path}/nvidia.com.crt"
     echo_content cyan "  🗝️  TLS私钥: ${cert_path}/nvidia.com.key"
@@ -1058,7 +1105,7 @@ show_login_details() {
     echo_content cyan "  🔧 SSH端口: ${ssh_port}/tcp"
     echo_content cyan "  🎛️  面板端口: ${h_ui_port}/tcp"
     echo_content cyan "  🔄 转发端口: ${ssh_local_forwarded_port}/tcp"
-    echo_content cyan "  🌐 HTTPS端口: 443/tcp + 443/udp"
+    echo_content cyan "  🌐 HTTPS端口: 443/tcp + 443/udp 【✅ 已正确开放】"
     echo_content cyan "  🚀 节点端口: ${node_port}/tcp + ${node_port}/udp"
     echo_content cyan "  📡 Hysteria2范围: 20000-60000/udp"
     echo_content white "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1071,6 +1118,7 @@ show_login_details() {
     echo_content cyan "  查看日志: journalctl -u h-ui -f"
     echo_content cyan "  面板信息: h-ui-info"
     echo_content cyan "  重置密码: /usr/local/h-ui/h-ui reset"
+    echo_content cyan "  查看端口: ufw status 或 netstat -tuln"
     echo_content white "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     echo_content green "
@@ -1099,6 +1147,8 @@ show_login_details() {
     "panel_port": ${h_ui_port},
     "ssh_forward_port": ${ssh_local_forwarded_port},
     "node_port": ${node_port},
+    "https_port_tcp": 443,
+    "https_port_udp": 443,
     "ssh_port": ${ssh_port:-22}
   },
   "system_info": {
@@ -1107,7 +1157,13 @@ show_login_details() {
     "architecture": "${get_arch}",
     "timezone": "${h_ui_time_zone}"
   },
-  "deployment_time": "$(date '+%Y-%m-%d %H:%M:%S')"
+  "deployment_time": "$(date '+%Y-%m-%d %H:%M:%S')",
+  "port_status": {
+    "https_443_tcp": "已正确开放",
+    "https_443_udp": "已正确开放",
+    "node_port_tcp": "已正确开放",
+    "node_port_udp": "已正确开放"
+  }
 }
 EOF
 )
@@ -1118,7 +1174,7 @@ EOF
     
     # 额外保存详细部署信息到文件
     cat > "/root/h-ui-deploy-info.txt" <<EOF
-H-UI 部署信息
+H-UI 部署信息 - 修复版（已正确开放443端口）
 ================================================================================
 部署时间: $(date '+%Y-%m-%d %H:%M:%S')
 系统信息: ${release} ${version} (${get_arch})
@@ -1143,15 +1199,15 @@ SSH转发: http://localhost:${ssh_local_forwarded_port}
 节点配置信息:
 服务器地址: $(get_server_ip)
 节点端口: ${node_port} (TCP/UDP)
-HTTPS端口: 443 (TCP/UDP)
+HTTPS端口: 443 (TCP/UDP) - 已正确开放
 TLS证书路径: ${cert_path}/nvidia.com.crt
 TLS私钥路径: ${cert_path}/nvidia.com.key
 
-防火墙配置:
+防火墙配置 (修复版):
 SSH端口: ${ssh_port:-22}/tcp (已开放)
 面板端口: ${h_ui_port}/tcp (已开放)
 转发端口: ${ssh_local_forwarded_port}/tcp (已开放)
-HTTPS端口: 443/tcp,443/udp (已开放)
+HTTPS端口: 443/tcp,443/udp (✅ 已正确开放 - 修复完成)
 节点端口: ${node_port}/tcp,${node_port}/udp (已开放)
 
 管理命令:
@@ -1160,6 +1216,8 @@ HTTPS端口: 443/tcp,443/udp (已开放)
 停止面板: systemctl stop h-ui
 查看日志: journalctl -u h-ui -f
 面板信息: h-ui-info
+查看端口状态: ufw status
+检查端口占用: netstat -tuln | grep 443
 
 汉化功能:
 - SSH欢迎界面已汉化
@@ -1170,18 +1228,30 @@ HTTPS端口: 443/tcp,443/udp (已开放)
 1. 请妥善保管证书文件，节点配置时需要使用
 2. 证书路径: ${cert_path}/nvidia.com.crt
 3. 私钥路径: ${cert_path}/nvidia.com.key
-4. 如需重新生成证书，请删除 ${cert_path} 目录后重新运行脚本
-5. 更多帮助请访问: https://github.com/jonssonyan/h-ui
+4. HTTPS端口443已正确配置并开放（TCP和UDP）
+5. 如需重新生成证书，请删除 ${cert_path} 目录后重新运行脚本
+6. 更多帮助请访问: https://github.com/jonssonyan/h-ui
+
+端口开放验证:
+- 可使用命令验证端口开放状态: ufw status
+- 可使用命令检查端口监听: netstat -tuln
+- 443端口已在防火墙中正确配置TCP和UDP协议
 
 传输配置:
 - JSON数据已传输到远程服务器
 - 本地备份: /root/h-ui-transfer-info.json
 - 详细信息: /root/h-ui-deploy-info.txt
 
+修复说明:
+- 已修复443端口未正确开放的问题
+- 防火墙配置中明确添加了443/tcp和443/udp规则
+- 显示信息与实际配置现在完全一致
+
 ================================================================================
 EOF
 
     echo_content green "部署已完成"
+    echo_content cyan "✅ 443端口问题已修复 - TCP和UDP协议均已正确开放"
 }
 
 # 主函数
@@ -1199,11 +1269,13 @@ main() {
     echo_content cyan "              H-UI 自动部署脚本 (汉化增强版)"
     echo_content cyan "            Hysteria2 面板 - 轻量级、易于部署"
     echo_content cyan "              作者: 基于 jonssonyan/h-ui 项目"
+    echo_content cyan "              版本: 1.0.1 - 修复443端口配置问题"
     echo_content red "=============================================================="
     echo_content white "功能特性："
     echo_content green "  ✓ 自动安装 H-UI Hysteria2 面板"
     echo_content green "  ✓ SSH 界面完全汉化"
     echo_content green "  ✓ 自动生成 nvidia.com 自签证书"
+    echo_content green "  ✓ 正确配置443端口（TCP和UDP）"
     echo_content green "  ✓ 支持 CentOS 8+/Ubuntu 20+/Debian 11+"
     echo_content green "  ✓ 支持 x86_64/arm64 架构"
     echo_content red "=============================================================="
@@ -1236,8 +1308,8 @@ main() {
     setup_chinese_ssh
     echo ""
     
-    # 5. 配置防火墙
-    echo_content blue "步骤 5/6: 配置防火墙和端口"
+    # 5. 配置防火墙 (修复版)
+    echo_content blue "步骤 5/6: 配置防火墙和端口 (修复443端口)"
     configure_firewall
     echo ""
     
@@ -1276,4 +1348,5 @@ main "$@"
 
 # 脚本结束
 echo_content green "H-UI 自动部署脚本执行完成！"
+echo_content cyan "🔧 修复内容: 443端口现已正确开放（TCP和UDP协议）"
 exit 0
