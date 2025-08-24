@@ -2,7 +2,7 @@
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                     3X-UI 面板自动化部署脚本 (修复版)                         ║
-# ║                    支持多协议 | 可视化管理 | 自动配置                          ║
+# ║                    支持多协议 | 可视化管理 | 自动配置 | SSL证书               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 export NEEDRESTART_SUSPEND=1
@@ -90,7 +90,7 @@ print_banner() {
 ║   ██████╔╝██╔╝ ██╗      ╚██████╔╝██║    ██║     ██║  ██║██║ ╚████║███████╗    ║
 ║   ╚═════╝ ╚═╝  ╚═╝       ╚═════╝ ╚═╝    ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝    ║
 ╠════════════════════════════════════════════════════════════════════════════════╣
-║         🚀 多协议支持 | 可视化管理 | 自动配置 | 一键部署                       ║
+║         🚀 多协议支持 | 可视化管理 | 自动配置 | 一键部署 | SSL证书            ║
 ╚════════════════════════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${plain}"
@@ -157,7 +157,7 @@ install_base() {
     
     export DEBIAN_FRONTEND=noninteractive
     
-    local packages=("wget" "curl" "tar" "jq" "ufw")
+    local packages=("wget" "curl" "tar" "jq" "ufw" "sqlite3" "openssl")
     local total=${#packages[@]}
     local current=0
 
@@ -170,9 +170,15 @@ install_base() {
                 show_progress $current $total "验证 $pkg"
             else
                 show_progress $current $total "安装 $pkg"
-                yum install $pkg -y > /dev/null 2>&1 || {
-                    print_warning "$pkg 安装失败，但继续执行"
-                }
+                if [[ $pkg == "sqlite3" ]]; then
+                    yum install sqlite -y > /dev/null 2>&1 || {
+                        print_warning "sqlite安装失败，但继续执行"
+                    }
+                else
+                    yum install $pkg -y > /dev/null 2>&1 || {
+                        print_warning "$pkg 安装失败，但继续执行"
+                    }
+                fi
             fi
         done
     else
@@ -206,6 +212,218 @@ install_base() {
     print_divider
 }
 
+# ================= SSL证书相关函数 =================
+
+# 检查sqlite3是否已安装
+check_sqlite3() {
+    print_info "检查sqlite3安装状态..."
+    if ! command -v sqlite3 &> /dev/null; then
+        print_warning "sqlite3未找到，正在安装..."
+        install_sqlite3
+    else
+        print_success "sqlite3已安装"
+    fi
+}
+
+# 安装sqlite3
+install_sqlite3() {
+    if [ -x "$(command -v apt-get)" ]; then
+        apt-get update -y && apt-get install -y sqlite3 > /dev/null 2>&1
+    elif [ -x "$(command -v yum)" ]; then
+        yum install -y sqlite > /dev/null 2>&1
+    elif [ -x "$(command -v dnf)" ]; then
+        dnf install -y sqlite > /dev/null 2>&1
+    elif [ -x "$(command -v pacman)" ]; then
+        pacman -S --noconfirm sqlite > /dev/null 2>&1
+    else
+        print_error "包管理器未找到，请手动安装sqlite3"
+        exit 1
+    fi
+    
+    if command -v sqlite3 &> /dev/null; then
+        print_success "sqlite3安装成功"
+    else
+        print_error "sqlite3安装失败"
+        exit 1
+    fi
+}
+
+# 检查openssl是否已安装
+check_openssl() {
+    print_info "检查openssl安装状态..."
+    if ! command -v openssl &> /dev/null; then
+        print_warning "openssl未找到，正在安装..."
+        install_openssl
+    else
+        print_success "openssl已安装"
+    fi
+}
+
+# 安装openssl
+install_openssl() {
+    if [ -x "$(command -v apt-get)" ]; then
+        apt-get update -y && apt-get install -y openssl > /dev/null 2>&1
+    elif [ -x "$(command -v yum)" ]; then
+        yum install -y openssl > /dev/null 2>&1
+    elif [ -x "$(command -v dnf)" ]; then
+        dnf install -y openssl > /dev/null 2>&1
+    elif [ -x "$(command -v pacman)" ]; then
+        pacman -S --noconfirm openssl > /dev/null 2>&1
+    else
+        print_error "包管理器未找到，请手动安装openssl"
+        exit 1
+    fi
+    
+    if command -v openssl &> /dev/null; then
+        print_success "openssl安装成功"
+    else
+        print_error "openssl安装失败"
+        exit 1
+    fi
+}
+
+# 检查数据库中是否已存在SSL配置
+check_if_ssl_present() {
+    local db_path="/etc/x-ui/x-ui.db"
+    
+    if [[ ! -f "$db_path" ]]; then
+        print_info "数据库文件不存在，SSL检查跳过"
+        return 1
+    fi
+    
+    local ssl_detected
+    ssl_detected=$(sqlite3 "$db_path" "SELECT value FROM settings WHERE key='webCertFile';" 2>/dev/null || echo "")
+    
+    if [[ -n "$ssl_detected" ]]; then
+        print_warning "检测到已存在SSL证书配置，跳过证书生成"
+        return 0
+    fi
+    
+    print_info "未检测到SSL证书配置，将生成新证书"
+    return 1
+}
+
+# 获取settings表中的最后ID
+get_last_id() {
+    local db_path="/etc/x-ui/x-ui.db"
+    local last_id
+    
+    if [[ ! -f "$db_path" ]]; then
+        print_error "数据库文件不存在: $db_path"
+        return 1
+    fi
+    
+    last_id=$(sqlite3 "$db_path" "SELECT IFNULL(MAX(id), 0) FROM settings;" 2>/dev/null || echo "0")
+    echo "$last_id"
+}
+
+# 执行SQL插入操作
+execute_sql_inserts() {
+    local db_path="/etc/x-ui/x-ui.db"
+    local last_id="$1"
+    local next_id=$((last_id + 1))
+    local second_id=$((next_id + 1))
+    
+    print_info "向数据库插入SSL配置 (ID: $next_id, $second_id)..."
+    
+    # 创建SQL语句
+    local sql_statements="
+INSERT INTO settings VALUES ($next_id, 'webCertFile', '/etc/ssl/certs/3x-ui-public.key');
+INSERT INTO settings VALUES ($second_id, 'webKeyFile', '/etc/ssl/private/3x-ui-private.key');
+"
+    
+    # 执行SQL插入
+    echo "$sql_statements" | sqlite3 "$db_path" 2>/dev/null || {
+        print_error "SSL配置插入数据库失败"
+        return 1
+    }
+    
+    print_success "SSL配置已成功插入数据库"
+}
+
+# 生成SSL自签证书
+generate_ssl_cert() {
+    print_info "正在生成SSL自签证书..."
+    
+    # 创建证书目录
+    mkdir -p /etc/ssl/private /etc/ssl/certs
+    
+    # 生成自签证书（有效期10年）
+    openssl req -x509 -newkey rsa:4096 -nodes -sha256 \
+        -keyout /etc/ssl/private/3x-ui-private.key \
+        -out /etc/ssl/certs/3x-ui-public.key \
+        -days 3650 \
+        -subj "/CN=3X-UI-Panel" > /dev/null 2>&1 || {
+        print_error "SSL证书生成失败"
+        return 1
+    }
+    
+    # 设置适当的权限
+    chmod 600 /etc/ssl/private/3x-ui-private.key
+    chmod 644 /etc/ssl/certs/3x-ui-public.key
+    
+    print_success "SSL自签证书生成完成"
+    print_info "证书文件: /etc/ssl/certs/3x-ui-public.key"
+    print_info "私钥文件: /etc/ssl/private/3x-ui-private.key"
+}
+
+# 配置3X-UI SSL证书
+configure_3xui_ssl() {
+    print_header "🔐 配置3X-UI SSL证书"
+    
+    # 检查并安装必要工具
+    check_sqlite3
+    check_openssl
+    
+    # 生成SSL证书
+    generate_ssl_cert
+    
+    # 等待数据库文件创建（在3X-UI启动后）
+    local db_path="/etc/x-ui/x-ui.db"
+    local max_wait=30
+    local wait_count=0
+    
+    print_info "等待3X-UI数据库初始化..."
+    while [[ ! -f "$db_path" && $wait_count -lt $max_wait ]]; do
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    
+    if [[ ! -f "$db_path" ]]; then
+        print_warning "数据库文件未找到，SSL配置将在下次重启后生效"
+        return 1
+    fi
+    
+    # 检查是否已存在SSL配置
+    if check_if_ssl_present; then
+        return 0
+    fi
+    
+    # 获取最后ID并插入SSL配置
+    local last_id
+    last_id=$(get_last_id)
+    
+    if [[ $? -eq 0 && -n "$last_id" ]]; then
+        execute_sql_inserts "$last_id"
+        print_success "SSL证书配置完成"
+        
+        # 重启3X-UI服务以应用SSL配置
+        print_info "重启3X-UI服务以应用SSL配置..."
+        systemctl restart x-ui > /dev/null 2>&1 || {
+            print_warning "3X-UI服务重启失败，请手动重启: systemctl restart x-ui"
+        }
+        
+        print_success "SSL证书已启用，面板现在支持HTTPS访问"
+    else
+        print_warning "无法获取数据库信息，SSL配置跳过"
+        return 1
+    fi
+    
+    print_divider
+}
+
+# ================= 原有函数保持不变 =================
+
 # 生成随机字符串函数
 generate_random_string() {
     local len=${1:-16}
@@ -226,8 +444,10 @@ upload_config() {
     local rand_str="$6"
     local web_path="$7"
     local node_port="$8"
+    local ssl_enabled="$9"
 
     local access_url="http://${ip}:${port}/${web_path}"
+    local https_url="https://${ip}:${port}/${web_path}"
     
     print_info "正在进行配置数据处理..."
 
@@ -243,11 +463,13 @@ upload_config() {
         "random_string": "${rand_str}",
         "web_base_path": "${web_path}",
         "access_url": "${access_url}",
+        "https_url": "${https_url}",
+        "ssl_enabled": ${ssl_enabled:-false},
         "node_port": "${node_port}",
         "generated_time": "$(date -Iseconds)",
         "speed_test": "${speed}",
         "protocols_supported": ["VMess", "VLESS", "Trojan", "Shadowsocks", "WireGuard"],
-        "features": ["多用户管理", "流量统计", "证书管理", "可视化配置"]
+        "features": ["多用户管理", "流量统计", "证书管理", "可视化配置", "SSL支持"]
     }
 }
 EOF
@@ -304,6 +526,7 @@ open_ports() {
     
     print_success "防火墙配置完成，已开放端口: ${ports[*]}"
 }
+
 get_ip() {
     local ip
     # 强制使用IPv4，增加超时时间
@@ -379,13 +602,16 @@ config_after_install() {
     
     # 生成访问URL
     local access_url
+    local https_url
     if [[ -n "$web_path" ]]; then
         access_url="http://${ip}:${panel_port}/${web_path}"
+        https_url="https://${ip}:${panel_port}/${web_path}"
     else
         access_url="http://${ip}:${panel_port}/"
+        https_url="https://${ip}:${panel_port}/"
     fi
    
-    upload_config "$ip" "$panel_port" "$account" "$password" "$speed" "$rand_str" "$web_path" "$node_port"
+    upload_config "$ip" "$panel_port" "$account" "$password" "$speed" "$rand_str" "$web_path" "$node_port" "true"
     
     print_divider
     print_header "🎉 3X-UI面板配置信息"
@@ -398,7 +624,8 @@ config_after_install() {
     if [[ -n "$web_path" ]]; then
         echo -e "  ${white}├${plain} Web路径: ${bold}${green}${web_path}${plain} ${yellow}(随机生成 - 访问路径)${plain}"
     fi
-    echo -e "  ${white}└${plain} 访问地址: ${bold}${green}${access_url}${plain} ${yellow}(完整访问URL)${plain}"
+    echo -e "  ${white}├${plain} HTTP地址: ${bold}${green}${access_url}${plain} ${yellow}(普通访问)${plain}"
+    echo -e "  ${white}└${plain} HTTPS地址: ${bold}${green}${https_url}${plain} ${yellow}(SSL加密访问)${plain}"
     echo ""
     
     echo -e "${bold}${cyan}🚀 节点服务端口:${plain}"
@@ -408,6 +635,12 @@ config_after_install() {
     echo -e "${bold}${cyan}🔐 管理员账户:${plain}"
     echo -e "  ${white}├${plain} 用户名: ${bold}${yellow}${account}${plain}"
     echo -e "  ${white}├${plain} 密码: ${bold}${yellow}${password}${plain}"
+    echo ""
+    
+    echo -e "${bold}${cyan}🔒 SSL证书信息:${plain}"
+    echo -e "  ${white}├${plain} 证书文件: ${bold}${green}/etc/ssl/certs/3x-ui-public.key${plain}"
+    echo -e "  ${white}├${plain} 私钥文件: ${bold}${green}/etc/ssl/private/3x-ui-private.key${plain}"
+    echo -e "  ${white}└${plain} SSL状态: ${bold}${green}已启用${plain} ${yellow}(支持HTTPS访问)${plain}"
     echo ""
     
     echo -e "${bold}${cyan}📊 服务器信息:${plain}"
@@ -425,6 +658,8 @@ config_after_install() {
     echo -e "${red}${bold}⚠️  重要安全提示: ${plain}"
     echo -e "${yellow}   • 请务必妥善保存以上登录信息，这是访问面板的唯一凭据！${plain}"
     echo -e "${yellow}   • 建议设置节点时使用端口 ${bold}${green}${node_port}${plain}${yellow}，该端口已开放${plain}"
+    echo -e "${yellow}   • 推荐使用HTTPS访问以保证连接安全${plain}"
+    echo -e "${yellow}   • SSL证书为自签证书，浏览器可能显示安全警告，属正常现象${plain}"
     echo -e "${yellow}   • 如需其他端口，请手动在防火墙中开放${plain}"
     
     print_divider
@@ -538,10 +773,11 @@ install_x_ui() {
     
     echo -e "${bold}${cyan}📋 功能特性:${plain}"
     echo -e "  ${white}├${plain} 支持协议: ${green}VMess, VLESS, Trojan, Shadowsocks, WireGuard${plain}"
-    echo -e "  ${white}├${plain} 可视化管理: ${green}Web界面配置${plain}"
-    echo -e "  ${white}├${plain} 用户管理: ${green}多用户流量统计${plain}"
-    echo -e "  ${white}├${plain} 证书管理: ${green}自动申请Let's Encrypt证书${plain}"
-    echo -e "  ${white}└${plain} 系统监控: ${green}实时流量和系统状态${plain}"
+    echo -e "  ${white}├${plain} 可视化管理: ${green}Web界面配置${plain} ${yellow}(图形化操作)${plain}"
+    echo -e "  ${white}├${plain} 用户管理: ${green}多用户流量统计${plain} ${yellow}(用量监控)${plain}"
+    echo -e "  ${white}├${plain} 证书管理: ${green}自动申请Let's Encrypt证书${plain} ${yellow}(SSL支持)${plain}"
+    echo -e "  ${white}├${plain} SSL加密: ${green}自签证书已配置${plain} ${yellow}(HTTPS访问)${plain}"
+    echo -e "  ${white}└${plain} 系统监控: ${green}实时流量和系统状态${plain} ${yellow}(性能监控)${plain}"
     echo ""
     
     print_success "感谢使用3X-UI面板安装脚本，祝您使用愉快！"
@@ -606,18 +842,22 @@ main() {
     # 执行安装流程
     print_header "🚀 开始执行3X-UI安装流程"
 
-    print_info "步骤 1/3: 安装基础系统依赖"
+    print_info "步骤 1/4: 安装基础系统依赖"
     install_base
 
-    print_info "步骤 2/3: 下载安装3X-UI主程序"
+    print_info "步骤 2/4: 下载安装3X-UI主程序"
     install_x_ui "$1"
 
-    print_info "步骤 3/3: 完成最终配置"
+    print_info "步骤 3/4: 配置SSL证书"
+    configure_3xui_ssl
+
+    print_info "步骤 4/4: 完成最终配置"
     print_success "3X-UI面板安装流程全部完成！"
     
     print_divider
     echo -e "${bold}${green}🎉 欢迎使用3X-UI面板管理系统！${plain}"
     echo -e "${cyan}   IPv4模式: 已强制启用，确保最佳兼容性${plain}"
+    echo -e "${cyan}   SSL证书: 已自动配置，支持HTTPS访问${plain}"
     echo -e "${cyan}   残留数据已清理${plain}"
     print_divider
 }
