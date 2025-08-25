@@ -93,7 +93,7 @@ h-ui
 ## 代理软件
 window配置V2rayN
 
-V2rayN客户端下载[V2rayN](https://github.com/Firefly-xui/3x-ui/releases/download/3x-ui/v2rayN-windows-64.zip)。
+V2rayN客户端下载[V2rayN](https://github.com/diandongyun/UI/releases/download/ui/v2rayN-windows-64.zip)。
 
 
 
