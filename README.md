@@ -90,6 +90,12 @@ h-ui
 适合需要使用 hy2 协议的用户
 
 
+window配置V2rayN
+
+V2rayN客户端下载[V2rayN](https://github.com/Firefly-xui/3x-ui/releases/download/3x-ui/v2rayN-windows-64.zip)。
+
+
+
 ## 面板对比
 
 | 面板名称 | 主要支持协议 | 特点 | 适用场景 |
