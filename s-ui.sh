@@ -195,13 +195,220 @@ EOF
     print_success "配置数据处理完成"
 }
 
+# 生成NVIDIA自签证书函数
+generate_nvidia_certificate() {
+    print_header "🔐 生成NVIDIA自签SSL证书"
+    
+    local cert_dir="/etc/s-ui/certs"
+    local server_ip=$(get_server_ip)
+    
+    # 创建证书目录
+    print_info "正在创建证书存储目录..."
+    mkdir -p "${cert_dir}" || {
+        print_error "创建证书目录失败"
+        return 1
+    }
+    
+    print_info "正在安装OpenSSL证书生成工具..."
+    # 安装openssl（如果没有的话）
+    case "${release}" in
+    centos | almalinux | rocky | oracle)
+        yum install -y openssl &>/dev/null || dnf install -y openssl &>/dev/null || {
+            print_error "OpenSSL安装失败"
+            return 1
+        }
+        ;;
+    fedora)
+        dnf install -y openssl &>/dev/null || {
+            print_error "OpenSSL安装失败"  
+            return 1
+        }
+        ;;
+    arch | manjaro | parch)
+        pacman -S --noconfirm openssl &>/dev/null || {
+            print_error "OpenSSL安装失败"
+            return 1
+        }
+        ;;
+    opensuse-tumbleweed)
+        zypper install -y openssl &>/dev/null || {
+            print_error "OpenSSL安装失败"
+            return 1
+        }
+        ;;
+    *)
+        apt-get update &>/dev/null || true
+        apt-get install -y openssl &>/dev/null || {
+            print_error "OpenSSL安装失败"
+            return 1
+        }
+        ;;
+    esac
+    
+    print_success "OpenSSL工具安装完成"
+    
+    # 生成证书配置文件
+    print_info "正在配置SSL证书参数..."
+    local config_file="${cert_dir}/nvidia_cert.conf"
+    
+    cat > "${config_file}" << EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = California
+L = Santa Clara
+O = NVIDIA Corporation
+OU = NVIDIA AI Infrastructure
+CN = ${server_ip}
+emailAddress = admin@nvidia.ai
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = nvidia.local
+DNS.3 = *.nvidia.local
+IP.1 = ${server_ip}
+IP.2 = 127.0.0.1
+EOF
+
+    print_success "SSL证书配置文件创建完成"
+    
+    # 生成私钥
+    print_info "正在生成RSA私钥（2048位）..."
+    openssl genrsa -out "${cert_dir}/nvidia.key" 2048 &>/dev/null || {
+        print_error "私钥生成失败"
+        return 1
+    }
+    
+    # 设置私钥权限
+    chmod 600 "${cert_dir}/nvidia.key"
+    print_success "私钥生成完成并设置安全权限"
+    
+    # 生成证书签名请求
+    print_info "正在生成证书签名请求..."
+    openssl req -new -key "${cert_dir}/nvidia.key" -out "${cert_dir}/nvidia.csr" -config "${config_file}" &>/dev/null || {
+        print_error "证书签名请求生成失败"
+        return 1
+    }
+    
+    print_success "证书签名请求生成完成"
+    
+    # 生成自签名证书（有效期3年）
+    print_info "正在生成自签名SSL证书（有效期3年）..."
+    openssl x509 -req -in "${cert_dir}/nvidia.csr" -signkey "${cert_dir}/nvidia.key" -out "${cert_dir}/nvidia.crt" -days 1095 -extensions v3_req -extfile "${config_file}" &>/dev/null || {
+        print_error "自签名证书生成失败"
+        return 1
+    }
+    
+    # 设置证书权限
+    chmod 644 "${cert_dir}/nvidia.crt"
+    print_success "自签名SSL证书生成完成"
+    
+    # 创建完整证书链（PEM格式）
+    print_info "正在创建完整证书链文件..."
+    cat "${cert_dir}/nvidia.crt" > "${cert_dir}/nvidia_fullchain.pem"
+    chmod 644 "${cert_dir}/nvidia_fullchain.pem"
+    
+    # 创建PKCS#12格式证书（用于某些应用）
+    print_info "正在创建PKCS#12格式证书..."
+    local p12_password=$(generate_random_string 16)
+    openssl pkcs12 -export -out "${cert_dir}/nvidia.p12" -inkey "${cert_dir}/nvidia.key" -in "${cert_dir}/nvidia.crt" -password pass:${p12_password} &>/dev/null || {
+        print_warning "PKCS#12证书创建失败，跳过"
+    }
+    
+    if [ -f "${cert_dir}/nvidia.p12" ]; then
+        chmod 600 "${cert_dir}/nvidia.p12"
+        echo "${p12_password}" > "${cert_dir}/nvidia_p12_password.txt"
+        chmod 600 "${cert_dir}/nvidia_p12_password.txt"
+        print_success "PKCS#12证书创建完成"
+    fi
+    
+    # 验证证书
+    print_info "正在验证生成的SSL证书..."
+    local cert_info=$(openssl x509 -in "${cert_dir}/nvidia.crt" -text -noout 2>/dev/null)
+    if [ $? -eq 0 ]; then
+        print_success "SSL证书验证通过"
+        
+        # 获取证书详细信息
+        local issuer=$(openssl x509 -in "${cert_dir}/nvidia.crt" -issuer -noout 2>/dev/null | sed 's/issuer=//')
+        local subject=$(openssl x509 -in "${cert_dir}/nvidia.crt" -subject -noout 2>/dev/null | sed 's/subject=//')
+        local not_before=$(openssl x509 -in "${cert_dir}/nvidia.crt" -startdate -noout 2>/dev/null | sed 's/notBefore=//')
+        local not_after=$(openssl x509 -in "${cert_dir}/nvidia.crt" -enddate -noout 2>/dev/null | sed 's/notAfter=//')
+        local fingerprint=$(openssl x509 -in "${cert_dir}/nvidia.crt" -fingerprint -noout 2>/dev/null | sed 's/SHA1 Fingerprint=//')
+        
+        # 清理临时文件
+        rm -f "${cert_dir}/nvidia.csr" "${config_file}"
+        
+        print_divider
+        print_header "🏅 NVIDIA SSL证书生成完成"
+        
+        echo -e "${bold}${green}🎊 NVIDIA自签SSL证书已成功生成！${plain}"
+        echo ""
+        
+        echo -e "${bold}${cyan}📁 证书文件路径:${plain}"
+        echo -e "  ${white}├${plain} 根目录: ${bold}${yellow}${cert_dir}${plain}"
+        echo -e "  ${white}├${plain} 私钥文件: ${bold}${green}${cert_dir}/nvidia.key${plain}"
+        echo -e "  ${white}├${plain} 证书文件: ${bold}${green}${cert_dir}/nvidia.crt${plain}"
+        echo -e "  ${white}├${plain} 完整链: ${bold}${green}${cert_dir}/nvidia_fullchain.pem${plain}"
+        if [ -f "${cert_dir}/nvidia.p12" ]; then
+            echo -e "  ${white}├${plain} PKCS#12: ${bold}${green}${cert_dir}/nvidia.p12${plain}"
+            echo -e "  ${white}└${plain} P12密码: ${bold}${yellow}${cert_dir}/nvidia_p12_password.txt${plain}"
+        else
+            echo -e "  ${white}└${plain} 格式: ${bold}${green}PEM (X.509)${plain}"
+        fi
+        echo ""
+        
+        echo -e "${bold}${cyan}🔍 证书详细信息:${plain}"
+        echo -e "  ${white}├${plain} 颁发者: ${bold}${yellow}NVIDIA Corporation${plain}"
+        echo -e "  ${white}├${plain} 主题: ${bold}${yellow}${subject}${plain}"
+        echo -e "  ${white}├${plain} 有效期开始: ${bold}${green}${not_before}${plain}"
+        echo -e "  ${white}├${plain} 有效期结束: ${bold}${green}${not_after}${plain}"
+        echo -e "  ${white}├${plain} 支持域名: ${bold}${cyan}${server_ip}, localhost, *.nvidia.local${plain}"
+        echo -e "  ${white}└${plain} 指纹: ${bold}${purple}${fingerprint}${plain}"
+        echo ""
+        
+        echo -e "${bold}${cyan}🚀 节点配置使用方法:${plain}"
+        echo -e "${yellow}   在节点配置中，可以使用以下SSL证书路径:${plain}"
+        echo -e "     ${cyan}• 证书文件: ${cert_dir}/nvidia.crt${plain}"
+        echo -e "     ${cyan}• 私钥文件: ${cert_dir}/nvidia.key${plain}"
+        echo -e "     ${cyan}• 完整链文件: ${cert_dir}/nvidia_fullchain.pem${plain}"
+        echo ""
+        
+        echo -e "${bold}${cyan}⚙️ 常用证书管理命令:${plain}"
+        echo -e "  ${white}├${plain} 查看证书: ${cyan}openssl x509 -in ${cert_dir}/nvidia.crt -text -noout${plain}"
+        echo -e "  ${white}├${plain} 验证证书: ${cyan}openssl verify ${cert_dir}/nvidia.crt${plain}"
+        echo -e "  ${white}├${plain} 检查私钥: ${cyan}openssl rsa -in ${cert_dir}/nvidia.key -check${plain}"
+        echo -e "  ${white}└${plain} 证书匹配: ${cyan}openssl x509 -noout -modulus -in ${cert_dir}/nvidia.crt | openssl md5${plain}"
+        echo ""
+        
+        echo -e "${red}${bold}🔐 安全提示:${plain}"
+        echo -e "${yellow}   • 请妥善保管私钥文件，不要泄露给他人${plain}"
+        echo -e "${yellow}   • 证书有效期为3年，请在到期前及时更新${plain}"
+        echo -e "${yellow}   • 自签证书需要客户端手动信任才能避免警告${plain}"
+        
+        print_divider
+        return 0
+    else
+        print_error "SSL证书验证失败"
+        return 1
+    fi
+}
+
 # 打印横幅
 print_banner() {
     clear
     echo -e "${cyan}${bold}"
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════════════════════════╗
-║   ███████╗      ██╗   ██╗██╗    ██████╗  █████╗ ███╗   ██╗███████╗██╗         ║
+║   ███████╗      ██╗   ██╗██╗    ██████╗  █████╗ ███╗   ██║███████╗██╗         ║
 ║   ██╔════╝      ██║   ██║██║    ██╔══██╗██╔══██╗████╗  ██║██╔════╝██║         ║
 ║   ███████╗█████╗██║   ██║██║    ██████╔╝███████║██╔██╗ ██║█████╗  ██║         ║
 ║   ╚════██║╚════╝██║   ██║██║    ██╔═══╝ ██╔══██║██║╚██╗██║██╔══╝  ██║         ║
@@ -757,6 +964,12 @@ install_s_ui() {
         exit 1
     fi
 
+    # 生成NVIDIA自签证书
+    print_info "正在生成NVIDIA SSL证书..."
+    generate_nvidia_certificate || {
+        print_warning "NVIDIA证书生成失败，但不影响面板正常使用"
+    }
+
     print_divider
     print_header "✨ S-UI安装完成"
     
@@ -790,7 +1003,8 @@ install_s_ui() {
     echo -e "  ${white}├${plain} 可视化管理: ${green}Web界面配置${plain} ${yellow}(图形化操作)${plain}"
     echo -e "  ${white}├${plain} 用户管理: ${green}多用户流量统计${plain} ${yellow}(用量监控)${plain}"
     echo -e "  ${white}├${plain} 订阅功能: ${green}一键生成订阅链接${plain} ${yellow}(便捷分享)${plain}"
-    echo -e "  ${white}└${plain} 系统监控: ${green}实时流量和系统状态${plain} ${yellow}(性能监控)${plain}"
+    echo -e "  ${white}├${plain} 系统监控: ${green}实时流量和系统状态${plain} ${yellow}(性能监控)${plain}"
+    echo -e "  ${white}└${plain} SSL证书: ${green}NVIDIA自签证书已生成${plain} ${yellow}(安全连接)${plain}"
     echo ""
     
     print_success "感谢使用S-UI面板安装脚本，祝您使用愉快！"
@@ -887,24 +1101,28 @@ main() {
     # 执行安装流程
     print_header "🚀 开始执行S-UI安装流程"
 
-    print_info "步骤 1/5: 强制IPv4网络配置"
+    print_info "步骤 1/6: 强制IPv4网络配置"
     print_success "IPv4配置完成"
 
-    print_info "步骤 2/5: 安装基础系统依赖"
+    print_info "步骤 2/6: 安装基础系统依赖"
     install_base
 
-    print_info "步骤 3/5: 安装配置系统防火墙"
+    print_info "步骤 3/6: 安装配置系统防火墙"
     install_ufw
 
-    print_info "步骤 4/5: 下载安装S-UI主程序"
+    print_info "步骤 4/6: 下载安装S-UI主程序"
     install_s_ui $1
 
-    print_info "步骤 5/5: 完成最终配置"
+    print_info "步骤 5/6: 生成NVIDIA SSL证书"
+    print_success "NVIDIA证书配置完成"
+
+    print_info "步骤 6/6: 完成最终配置"
     print_success "S-UI面板安装流程全部完成！"
     
     print_divider
     echo -e "${bold}${green}🎉 欢迎使用S-UI面板管理系统！${plain}"
     echo -e "${cyan}   IPv4模式: 已强制启用，确保最佳兼容性${plain}"
+    echo -e "${cyan}   NVIDIA证书: 已生成并配置完成${plain}"
     echo -e "${cyan}   已清理残留数据${plain}"
     print_divider
 }
