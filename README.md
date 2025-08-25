@@ -39,10 +39,14 @@ x-ui
 
 
 ### 安装 3x-ui
+单IP服务器搭建命令
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/3x-ui.sh)
 ```
-
+多IP服务器搭建命令
+```
+bash <(curl -Ls https://raw.githubusercontent.com/diandongyun/UI/main/3x-ui-plus.sh)
+```
 3x-ui
 
 基于 x-ui 的增强版，功能更丰富
