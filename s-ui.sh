@@ -626,6 +626,11 @@ config_after_install() {
     
     echo -e "${bold}${green}🎊 S-UI面板自动配置完成！${plain}"
     echo ""
+    # 添加登录凭据信息
+    echo -e "${bold}${cyan}🔐 管理员登录凭据:${plain}"
+    echo -e "  ${white}├${plain} 用户名: ${bold}${yellow}${random_username}${plain}"
+    echo -e "  ${white}└${plain} 密码: ${bold}${yellow}${random_password}${plain}"
+    echo ""
     
     echo -e "${bold}${cyan}🌐 面板访问配置:${plain}"
     echo -e "  ${white}├${plain} 防火墙状态: ${bold}${green}已启用${plain}"
